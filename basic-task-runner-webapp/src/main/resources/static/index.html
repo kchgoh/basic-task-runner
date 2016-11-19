@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+	
+	<link rel="stylesheet" href="bootstrap-3.3.7/css/bootstrap.min.css">
+	
+	<script src="jquery-2.2.4.min.js"></script>
+	<script src="sockjs-1.1.0.min.js"></script>
+	<script src="bootstrap-3.3.7/js/bootstrap.min.js"></script>
+	
+	<script type="text/javascript">
+	$(document).ready(function() {
+		function getCommandDefs() {
+			$.ajax({
+				url: "commanddefs",
+				type: "GET",
+				dataType: "json",
+				success: function(data, status, xhr) {
+					console.debug(JSON.stringify(data));
+					buildUIFromCommandDefs(data);
+				}
+			});
+		}
+		
+		getCommandDefs();
+	});
+	
+	function htmlEncode(value) {
+		// create an in-memory div, set it's inner text(which jQuery auto encodes)
+		// then grab the encoded contents out. The div never exists on the page.
+		return $('<div/>').text(value).html();
+	}
+	
+	function buildArgsInputPanel(container, commandDef) {
+		
+		var command = commandDef.command;
+		var argsHTML = "<input type='hidden' name='command' value ='" + command + "'>";
+		
+		for(var i=0; i < commandDef.args.length; ++i) {
+			var argName = commandDef.args[i].name;
+			var argType = commandDef.args[i].type;
+			var argDefaultValue = commandDef.args[i].defaultValue;
+			var argId = command + "-" + argName;
+			
+			var inputHTML = "";
+			switch(argType) {
+			case "longstring":
+				var defaultValueHTML = argDefaultValue == null ? "" : htmlEncode(argDefaultValue);
+				inputHTML = "<textarea class='form-control' rows='5' name='" + argName + "'>" + defaultValueHTML + "</textarea>";
+				break;
+			case "string":
+				var defaultValueHTML = argDefaultValue == null ? "" : " value='" + argDefaultValue + "'";
+				inputHTML = "<input type='text' class='form-control' name='" + argName + "'" + defaultValueHTML + ">";
+				break;
+			}
+			
+			argsHTML += "<div class='form-group'>" +
+						"<label for='" + argId + "'>" + argName + "</label>" +
+						inputHTML +
+						"</div>";							
+		}
+		container.append(
+				$("<div id='" + getArgsInputPanelID(commandDef.command) + "'>").append(
+						$("<form>").append(argsHTML)));
+	}
+	
+	function buildUIFromCommandDefs(defs) {
+		for(var i=0; i < defs.length; ++i) {
+			$("#commandsList").append("<option value='" + defs[i].command + "'>" + defs[i].displayName + "</option>");
+			buildArgsInputPanel($("#argsInputContainer"), defs[i]);
+		}
+	}
+	
+	function onCommandSelected() {
+		var selectedCommand = $("#commandsList").val();
+		var panelIDToDisplay = getArgsInputPanelID(selectedCommand);
+		$("#argsInputContainer").children("div").each(function(index) {
+			if($(this).attr("id") == panelIDToDisplay) {
+				$(this).show();
+			} else {
+				$(this).hide();
+			}
+		});
+		$("#argsInputPanel").show();
+		$("#actionContainer").show();
+	}
+	
+	function getArgsInputPanelID(command) {
+		return "args-" + command;
+	}
+	
+	var executing = false;
+	
+	function doExecute() {
+		var selectedCommand = $("#commandsList").val();
+		var panelID = getArgsInputPanelID(selectedCommand);
+		var submitData = {};
+		var inputs = $("#" + panelID).filter(":input");
+		$("#" + panelID).find(":input").each(function(index) {
+			submitData[$(this).attr("name")] = $(this).val();
+		});
+		sendToWebSocket(function(ws) {
+			ws.send(JSON.stringify(submitData));
+		})
+	}
+	
+	function doCancel() {
+		var selectedCommand = $("#commandsList").val();
+		var submitData = {
+				command: selectedCommand,
+				cancel: 1
+		};
+		sendToWebSocket(function(ws) {
+			ws.send(JSON.stringify(submitData));
+		});
+	}
+	
+	function onExecuting() {
+		// TODO disable all controls except cancel button
+	}
+	
+	function onStopped() {
+		// TODO enable all controls
+	}
+	
+	var ws = null;
+	function sendToWebSocket(openCallback) {
+		if(ws != null) {
+			openCallback(ws);
+			return;
+		}
+		
+		ws = new SockJS("/action");
+		ws.onopen = function() {
+			console.debug("connected");
+			log("Connected to server");
+			openCallback(ws);
+		};
+		ws.onmessage = function(event) {
+			console.debug("received");
+			log(event.data);
+		};
+		ws.onclose = function() {
+			console.debug("closed");
+			ws = null;
+			log("Server connection closed");
+		};
+	}
+	
+	function log(message) {
+		var sa = $("#statusArea");
+		sa.val(sa.val() + message + "\n");
+		sa.scrollTop(sa[0].scrollHeight);
+	}
+	
+	function clearStatus() {
+		$("#statusArea").val("");
+	}
+	</script>
+</head>
+<body>
+	<div style="width:100%; min-height:50px; background-color:black; margin-bottom:10px;">
+		<div class="container">
+			<div style="color:white; margin-left:10px;">
+				<h3>Basic Task Runner</h3>
+			</div>
+		</div>
+	</div>
+	<div class="container">
+		<div class="row">
+			<div class="col-md-5">
+				<div class="panel panel-default">
+					<div class="panel-heading">Command</div>
+					<div class="panel-body">
+						<div class="form-group">
+							<select id="commandsList" class="form-control" onchange="onCommandSelected();">
+								<option selected disabled>Select Command...</option>
+							</select>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+		<div class="row">
+			<div class="col-md-7">
+				<div id="argsInputPanel" class="panel panel-default" style="display:none">
+					<div class="panel-heading">Arguments</div>
+					<div id="argsInputContainer" class="panel-body"></div>
+				</div>
+			</div>
+		</div>
+		<div id="actionContainer" class="panel panel-default" style="display:none">
+			<div class="panel-body">
+				<button class="btn btn-default" onclick="doExecute();">Execute</button>
+				<button class="btn btn-default" onclick="doCancel();">Stop / Cancel</button>
+			</div>
+		</div>
+		<div id="statusPanel" class="panel panel-default">
+			<div class="panel-heading">Status</div>
+			<div class="panel-body">
+				<button class="btn btn-default" style="margin-bottom:5px" onclick="clearStatus();">Clear</button>
+				<textarea id="statusArea" class="form-control" rows="10" style="width:100%"></textarea>
+			</div>
+		</div>
+	</div>
+</body>
+</html>
